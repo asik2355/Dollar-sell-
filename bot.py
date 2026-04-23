@@ -20,7 +20,7 @@ except Exception as e:
 
 db = firestore.client() if firebase_admin._apps else None
 
-TOKEN = '8716745260:AAGPEuKxQgK3Vv7kTQ5vmlup89acZ9trLNQ'
+TOKEN = '8782236093:AAFDDA5IKcBzL4loZ8j9iKglpoQPXf0jBQM'
 bot = telebot.TeleBot(TOKEN)
 
 PERMANENT_ADMIN_IDS = [8716745260, 8197284774]
@@ -53,6 +53,7 @@ def bold(text):
     return to_unicode_bold(str(text).upper())
 
 def normalize_text(text):
+    if not text: return ""
     chars = {
         '𝗔': 'A', '𝗕': 'B', '𝗖': 'C', '𝗗': 'D', '𝗘': 'E', '𝗙': 'F', '𝗚': 'G', '𝗛': 'H', '𝗜': 'I', '𝗝': 'J', '𝗞': 'K', '𝗟': 'L', '𝗠': 'M', '𝗡': 'N', '𝗢': 'O', '𝗣': 'P', '𝗤': 'Q', '𝗥': 'R', '𝗦': 'S', '𝗧': 'T', '𝗨': 'U', '𝗩': 'V', '𝗪': 'W', '𝗫': 'X', '𝗬': 'Y', '𝗭': 'Z',
         '𝗮': 'A', '𝗯': 'B', '𝗰': 'C', '𝗱': 'D', '𝗲': 'E', '𝗳': 'F', '𝗴': 'G', '𝗵': 'H', '𝗶': 'I', '𝗷': 'J', '𝗸': 'K', '𝗹': 'L', '𝗺': 'M', '𝗻': 'N', '𝗼': 'O', '𝗽': 'P', '𝗾': 'Q', '𝗿': 'R', '𝘀': 'S', '𝘁': 'T', '𝘂': 'U', '𝘃': 'V', '𝘄': 'W', '𝘅': 'X', '𝘆': 'Y', '𝘇': 'Z',
@@ -161,7 +162,7 @@ def handle_start(message):
     load_settings()
     
     welcome_text = (f"𝗔𝗦𝗦𝗔𝗠𝗨𝗟𝗔𝗜𝗞𝗨𝗠 ❤️\n"
-                    f"𝗜'𝗠 {bold('𝗥𝗔𝗙𝗦𝗨𝗡 𝗥𝗔𝑽𝗜𝗗')}\n"
+                    f"𝗜'𝗠 {bold('𝗥𝗔𝗙𝗦𝗨𝗡 𝗥𝗔𝗩𝗜𝗗')}\n"
                     f"{bold('𝗔𝗗𝗠𝗜𝗡 𝗢𝗙 𝗨𝗡Ｉ𝗩𝗘𝗥𝗦𝗘 𝗘𝗫𝗖𝗛𝗔𝗡𝗚𝗘𝗥')}")
     
     safe_send_message(message.chat.id, welcome_text, reply_markup=get_main_menu(user_id))
@@ -174,7 +175,7 @@ def handle_all_messages(message):
     raw_text = message.text or ""
     clean_text = normalize_text(raw_text)
     
-    if clean_text == 'SELL DOLLAR':
+    if 'SELL DOLLAR' in clean_text:
         user_states[user_id] = {'step': 'SELECT_DEPOSIT_METHOD', 'data': {}}
         markup = types.InlineKeyboardMarkup()
         for m in settings['depositMethods']:
@@ -184,7 +185,7 @@ def handle_all_messages(message):
         safe_send_message(chat_id, f"🏦 {bold('Choose How You Want To Pay')}\n\n👇 {bold('Select where you will send your money')}:", reply_markup=markup)
         return
 
-    if clean_text == 'SUPPORT':
+    if 'SUPPORT' in clean_text:
         first_name = message.from_user.first_name or "User"
         support_msg = (f"═《  {bold('𝗦𝗨𝗣𝗣𝗢𝗥𝗧')} 》═\n"
                        f"━━━━━━━━━━━\n"
@@ -194,6 +195,19 @@ def handle_all_messages(message):
                        f"➤ Tap support button\n"
                        f"➤ To contact admin!\n"
                        f"━━━━━━━━━━━")
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton(f"☎️ {bold('SUPPORT')}", url=f"https://t.me/{settings['supportUsername']}"))
+        markup.add(types.InlineKeyboardButton(f"🔙 {bold('Back to Menu')}", callback_data='menu_main'))
+        safe_send_message(chat_id, support_msg, reply_markup=markup)
+        return
+
+    if 'ADMIN PANEL' in clean_text:
+        if not is_admin(user_id):
+            safe_send_message(chat_id, f"❌ {bold('𝗔𝗰𝗰𝗲𝘀𝘀 𝗗𝗲𝗻𝗶𝗲𝗱. 𝗔𝗱𝗺𝗶𝗻𝘀 𝗢𝗻𝗹𝘆.')}")
+            return
+        show_admin_panel(chat_id)
+        return
+              f"━━━━━━━━━━━")
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton(f"☎️ {bold('SUPPORT')}", url=f"https://t.me/{settings['supportUsername']}"))
         markup.add(types.InlineKeyboardButton(f"🔙 {bold('Back to Menu')}", callback_data='menu_main'))
