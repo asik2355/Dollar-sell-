@@ -1,8 +1,25 @@
 import logging
 import json
 import os
+import firebase_admin
+from firebase_admin import credentials, firestore
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+
+# --- FIREBASE SETUP ---
+# Note: Ensure you have your Firebase Service Account JSON as 'firebase-adminsdk.json'
+try:
+    if not firebase_admin._apps:
+        if os.path.exists("firebase-adminsdk.json"):
+            cred = credentials.Certificate("firebase-adminsdk.json")
+            firebase_admin.initialize_app(cred)
+        else:
+            # Fallback for environments where default credentials might work
+            firebase_admin.initialize_app()
+    db = firestore.client()
+except Exception as e:
+    print(f"Firebase initialization warning: {e}")
+    db = None
 
 # --- CONFIGURATION ---
 TOKEN = "8716745260:AAGPEuKxQgK3Vv7kTQ5vmlup89acZ9trLNQ"
@@ -38,19 +55,48 @@ def bold(text):
 # --- PERSISTENCE ---
 def load_settings():
     global settings
+    # Try loading from Firebase first if db is available
+    if db:
+        try:
+            doc_ref = db.collection("bot_settings").document("global")
+            doc = doc_ref.get()
+            if doc.exists:
+                data = doc.to_dict()
+                settings.update(data)
+                print("Settings loaded from Firebase.")
+        except Exception as e:
+            print(f"Firebase load error: {e}")
+    
+    # Fallback to local settings.json if Firebase fails or doesn't have data
     if os.path.exists(SETTINGS_FILE):
         try:
             with open(SETTINGS_FILE, "r") as f:
-                data = json.load(f)
-                settings.update(data)
+                local_data = json.load(f)
+                # Only update keys that are missing if Firebase already loaded some data
+                for k, v in local_data.items():
+                    if k not in settings or not settings[k]:
+                        settings[k] = v
         except: pass
+    
+    # Ensure permanent admins are always there
     for admin_id in PERMANENT_ADMIN_IDS:
         if admin_id not in settings["admins"]:
             settings["admins"].append(admin_id)
 
 def save_settings():
-    with open(SETTINGS_FILE, "w") as f:
-        json.dump(settings, f, indent=2)
+    # Save to Firebase
+    if db:
+        try:
+            doc_ref = db.collection("bot_settings").document("global")
+            doc_ref.set(settings)
+        except Exception as e:
+            print(f"Firebase save error: {e}")
+    
+    # Save to local as backup
+    try:
+        with open(SETTINGS_FILE, "w") as f:
+            json.dump(settings, f, indent=2)
+    except: pass
 
 load_settings()
 
@@ -264,7 +310,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_admin_panel(context, chat_id)
 
 async def submit_request(context, user_id, data, first_name):
-    if not settings["adminGroupId"]: return
+    if not settings["adminGroupId"]:
+        await context.bot.send_message(user_id, f"⚠️ *{bold('Admin Group Group Not Set!')}* Payment and transaction might be delayed. Please contact support.")
+        return
     
     user_link = f"[{bold(first_name)}](tg://user?id={user_id})"
     message = (
