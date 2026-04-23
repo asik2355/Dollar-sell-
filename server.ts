@@ -20,7 +20,7 @@ const firebaseConfig = {
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
 
-const token = '8716745260:AAGPEuKxQgK3Vv7kTQ5vmlup89acZ9trLNQ';
+const token = '8716745260:AAGiaHKOK5yVHZ-wTPYRqXwYZqBJPCFYGs8';
 const bot = new TelegramBot(token, { polling: true });
 
 interface Settings {
