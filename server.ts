@@ -401,7 +401,7 @@ bot.on('message', async (msg) => {
         break;
 
       case 'ADMIN_BROADCAST':
-        broadcastMessage(rawText, chatId);
+        broadcastMessage(msg, chatId);
         delete userStates[userId];
         break;
     }
@@ -411,7 +411,7 @@ bot.on('message', async (msg) => {
 });
 
 // Broadcast Logic
-async function broadcastMessage(message: string, adminChatId: number) {
+async function broadcastMessage(originalMsg: TelegramBot.Message, adminChatId: number) {
   try {
     const querySnapshot = await getDocs(collection(db, "bot_users"));
     let successCount = 0;
@@ -419,8 +419,9 @@ async function broadcastMessage(message: string, adminChatId: number) {
 
     for (const doc of querySnapshot.docs) {
       const userData = doc.data();
+      if (userData.userId === adminChatId) continue;
       try {
-        await bot.sendMessage(userData.userId, `📢 ${bold('𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧 𝗠𝗘𝗦𝗦𝗔𝗚𝗘')}\n\n${message}`);
+        await bot.copyMessage(userData.userId, adminChatId, originalMsg.message_id);
         successCount++;
       } catch (e) {
         failCount++;
