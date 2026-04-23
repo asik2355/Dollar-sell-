@@ -1,18 +1,30 @@
 import logging
-import asyncio
+import json
+import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-from number import manager
 
 # --- CONFIGURATION ---
-TOKEN = "YOUR_BOT_TOKEN_HERE" # Replace with your bot token
-ADMIN_ID = 8716745260 # Replace with your admin ID
+TOKEN = "8716745260:AAGPEuKxQgK3Vv7kTQ5vmlup89acZ9trLNQ"
+PERMANENT_ADMIN_IDS = [8716745260, 8197284774]
+SETTINGS_FILE = "settings.json"
 
-# --- LOGGING ---
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# --- DEFAULTS ---
+settings = {
+    "admins": list(PERMANENT_ADMIN_IDS),
+    "exchangeRate": 110,
+    "adminGroupId": None,
+    "depositMethods": [],
+    "withdrawalMethods": [],
+    "supportUsername": "admin",
+    "users": []
+}
+
+# Tracking for clean UI
+last_message_ids = {}
 
 # --- UNICODE BOLD HELPER ---
-def bold(text):
+def to_unicode_bold(text):
     text = text.upper()
     chars = {
         'A': '𝗔', 'B': '𝗕', 'C': '𝗖', 'D': '𝗗', 'E': '𝗘', 'F': '𝗙', 'G': '𝗚', 'H': '𝗛', 'I': '𝗜', 'J': '𝗝', 'K': '𝗞', 'L': '𝗟', 'M': '𝗠', 'N': '𝗡', 'O': '𝗢', 'P': '𝗣', 'Q': '𝗤', 'R': '𝗥', 'S': '𝗦', 'T': '𝗧', 'U': '𝗨', 'V': '𝗩', 'W': '𝗪', 'X': '𝗫', 'Y': '𝗬', 'Z': '𝗭',
@@ -20,129 +32,410 @@ def bold(text):
     }
     return "".join(chars.get(c, c) for c in text)
 
-# --- KEYBOARDS ---
-def get_main_menu():
-    keyboard = [
-        [bold("📱 BUY NUMBER"), bold("💰 TOP UP")],
-        [bold("📋 MY ORDERS"), bold("👤 PROFILE")],
-        [bold("☎️ SUPPORT")]
-    ]
+def bold(text):
+    return to_unicode_bold(text)
+
+# --- PERSISTENCE ---
+def load_settings():
+    global settings
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r") as f:
+                data = json.load(f)
+                settings.update(data)
+        except: pass
+    for admin_id in PERMANENT_ADMIN_IDS:
+        if admin_id not in settings["admins"]:
+            settings["admins"].append(admin_id)
+
+def save_settings():
+    with open(SETTINGS_FILE, "w") as f:
+        json.dump(settings, f, indent=2)
+
+load_settings()
+
+user_states = {}
+
+def is_admin(user_id):
+    return user_id in settings["admins"]
+
+def get_main_menu(user_id):
+    keyboard = [[bold("💵 Sell Dollar")], [bold("☎️ Support")]]
+    if is_admin(user_id):
+        keyboard[1].append(bold("⚙️ Admin Panel"))
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# --- HANDLERS ---
+async def safe_send(context, chat_id, text, reply_markup=None, parse_mode='Markdown'):
+    global last_message_ids
+    if chat_id in last_message_ids:
+        try:
+            await context.bot.delete_message(chat_id, last_message_ids[chat_id])
+        except: pass
+    
+    msg = await context.bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode, disable_web_page_preview=True)
+    last_message_ids[chat_id] = msg.message_id
+    return msg
+
+async def safe_edit(context, chat_id, message_id, text, reply_markup=None, parse_mode='Markdown'):
+    try:
+        await context.bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, reply_markup=reply_markup, parse_mode=parse_mode, disable_web_page_preview=True)
+    except:
+        await safe_send(context, chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    welcome_text = (
-        f"👋 {bold('WELCOME TO GSM OTP STORE')}\n\n"
-        f"🚀 {bold('BEST QUALITY VIRTUAL NUMBERS')}\n"
-        f"⚡ {bold('INSTANT OTP DELIVERY')}\n\n"
-        f"👇 {bold('SELECT AN OPTION FROM BELOW')}:"
-    )
-    await update.message.reply_text(welcome_text, reply_markup=get_main_menu(), parse_mode='Markdown')
-
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.upper()
     user_id = update.effective_user.id
+    if user_id not in settings["users"]:
+        settings["users"].append(user_id)
+        save_settings()
     
-    if "BUY NUMBER" in text:
+    welcome_text = (
+        f"𝗔𝗦𝗦𝗔𝗠𝗨𝗟𝗔𝗜𝗞𝗨𝗠 ❤️\n"
+        f"𝗜'𝗠 {bold('𝗥𝗔𝗙𝗦𝗨𝗡 𝗥𝗔𝗩𝗜𝗗')}\n"
+        f"{bold('𝗔𝗗𝗠𝗜𝗡 𝗢𝗙 𝗨𝗡𝗜𝗩𝗘𝗥𝗦𝗘 𝗘𝗫𝗖𝗛𝗔𝗡𝗚𝗘𝗥')}"
+    )
+    await safe_send(context, update.effective_chat.id, welcome_text, reply_markup=get_main_menu(user_id))
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    text = update.message.text
+    
+    clean_text = "".join(c for c in (text or "") if c.isalnum() or c.isspace()).upper()
+    
+    if "SELL DOLLAR" in clean_text:
+        if not settings["depositMethods"]:
+            await safe_send(context, chat_id, f"⚠️ *{bold('No deposit methods available.')}* Please contact admin.")
+            return
+        user_states[user_id] = {"step": "SELECT_DEPOSIT", "data": {}}
         keyboard = []
-        for country in manager.get_countries():
-            keyboard.append([InlineKeyboardButton(f"🌍 {bold(country)}", callback_data=f"country_{country}")])
-        
-        await update.message.reply_text(
-            f"🌍 *{bold('SELECT COUNTRY')}*:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
+        for m in settings["depositMethods"]:
+            keyboard.append([InlineKeyboardButton(f"💳 {bold(m['name'])}", callback_data=f"dep_{m['name']}")])
+        keyboard.append([InlineKeyboardButton(f"🔙 {bold('Back to Menu')}", callback_data="back_main")])
+        await safe_send(context, chat_id, f"🏦 *{bold('Choose How You Want To Pay')}*\n\n👇 *{bold('Select where you will send your money')}*:", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    if "SUPPORT" in clean_text:
+        name = update.effective_user.first_name or "User"
+        support_msg = (
+            f"═《  *{bold('𝗦𝗨𝗣𝗣𝗢𝗥𝗧')}* 》═\n"
+            f"━━━━━━━━━━━\n"
+            f"👋 Hello, *{bold(name)}*!\n"
+            f"💬 Welcome to support panel\n"
+            f"➤ Tell me how can I help you\n"
+            f"➤ Tap support button\n"
+            f"➤ To contact admin!\n"
+            f"━━━━━━━━━━━"
         )
+        keyboard = [
+            [InlineKeyboardButton(f"☎️ {bold('SUPPORT')}", url=f"https://t.me/{settings['supportUsername']}")],
+            [InlineKeyboardButton(f"🔙 {bold('Back to Menu')}", callback_data="back_main")]
+        ]
+        await safe_send(context, chat_id, support_msg, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
 
-    elif "PROFILE" in text:
-        profile_text = (
-            f"👤 *{bold('USER PROFILE')}*\n"
-            f"━━━━━━━━━━━━━━\n"
-            f"🆔 *{bold('ID')}*: `{user_id}`\n"
-            f"💰 *{bold('BALANCE')}*: 0.00 BDT\n"
-            f"📦 *{bold('TOTAL ORDERS')}*: 0\n"
-            f"━━━━━━━━━━━━━━"
-        )
-        await update.message.reply_text(profile_text, parse_mode='Markdown')
+    if "ADMIN PANEL" in clean_text:
+        if not is_admin(user_id): return
+        await show_admin_panel(context, chat_id)
+        return
 
-    elif "SUPPORT" in text:
-        await update.message.reply_text(f"☎️ *{bold('CONTACT ADMIN')}*: @admin", parse_mode='Markdown')
+    state = user_states.get(user_id)
+    if not state: return
 
-async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    data = query.data
-    user_id = query.from_user.id
+    step = state["step"]
+    if step == "ENTER_AMOUNT":
+        try:
+            amount = float(text)
+            if amount <= 0: raise ValueError
+            state["data"]["amount"] = amount
+            state["data"]["totalBdt"] = amount * settings["exchangeRate"]
+            state["step"] = "AWAIT_TX_ID"
+            method = state["data"]["depositMethod"]
+            
+            payment_msg = (
+                f"📋 *{bold('𝗣𝗔𝗬𝗠𝗘𝗡𝗧 𝗗𝗘𝗧𝗔𝗜𝗟𝗦')}*\n\n"
+                f"💰 *{bold('𝗦𝗘𝗡𝗗 𝗔𝗠𝗢𝗨𝗡𝗧')}*: {amount} dollar\n"
+                f"📉 *{bold('𝗥𝗔𝗧𝗘')}*: *{bold('𝟭 𝗨𝗦𝗗 = ' + str(settings['exchangeRate']) + ' 𝗕𝗗𝗧')}*\n"
+                f"*{bold('𝗬𝗢𝗨 𝗥𝗘𝗖𝗘𝗜𝗩𝗘')}* = {state['data']['totalBdt']} bdt\n"
+                f"🏦 *{bold('𝗧𝗥𝗔𝗡𝗦𝗙𝗘𝗥 𝗧𝗢')}*: {bold(method['name'])}\n"
+                f"📍 *{bold('𝗪𝗔𝗟𝗟𝗘𝗧/𝗔𝗗𝗗𝗥𝗘𝗦𝗦')}*: `{method['address']}`\n\n"
+                f"🚀 *{bold('𝗦𝗘𝗡𝗗 𝗧𝗛𝗘 𝗗𝗢𝗟𝗟𝗔𝗥 𝗔𝗡𝗗 𝗧𝗛𝗘𝗡 𝗣𝗥𝗢𝗩𝗜𝗗𝗘 𝗧𝗛𝗘 𝗧𝗥𝗔𝗡𝗦𝗔𝗖𝗧𝗜𝗢𝗡 𝗜𝗗 𝗧𝗢 𝗣𝗥𝗢𝗖𝗘𝗘𝗗')}*:"
+            )
+            keyboard = [[InlineKeyboardButton(f"🔙 {bold('Cancel Trade')}", callback_data="back_main")]]
+            await safe_send(context, chat_id, payment_msg, reply_markup=InlineKeyboardMarkup(keyboard))
+        except:
+            await safe_send(context, chat_id, f"⚠️ *{bold('Invalid Input. Please enter a valid positive number.')}*")
+
+    elif step == "AWAIT_TX_ID":
+        state["data"]["txId"] = text
+        state["step"] = "AWAIT_SCREENSHOT"
+        keyboard = [[InlineKeyboardButton(f"🔙 {bold('Cancel Trade')}", callback_data="back_main")]]
+        await safe_send(context, chat_id, f"✅ *{bold('𝗧𝗥𝗔𝗡𝗦𝗔𝗖𝗧𝗜𝗢𝗡 𝗜𝗗 𝗥𝗘𝗖𝗘𝗜𝗩𝗘𝗗!')}*\n\n📸 *{bold('𝗡𝗢𝗪 𝗣𝗟𝗘𝗔𝗦𝗘 𝗨𝗣𝗟𝗢𝗔𝗗 𝗧𝗛𝗘 𝗣𝗔𝗬𝗠𝗘𝗡𝗧 𝗦𝗖𝗥𝗘𝗘𝗡𝗦𝗛𝗢𝗧')}* 👇", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif step == "AWAIT_SCREENSHOT":
+        if update.message.photo:
+            state["data"]["screenshotId"] = update.message.photo[-1].file_id
+            state["step"] = "SELECT_WITHDRAW"
+            keyboard = [[InlineKeyboardButton(f"🏧 {bold(m)}", callback_data=f"with_{m}")] for m in settings["withdrawalMethods"]]
+            keyboard.append([InlineKeyboardButton(f"🔙 {bold('Cancel Trade')}", callback_data="back_main")])
+            await safe_send(context, chat_id, f"🏦 *{bold('𝗥𝗘𝗖𝗘𝗜𝗩𝗘 𝗠𝗢𝗡𝗘𝗬 𝗩𝗜𝗔')}*\n\n👇 *{bold('𝗦𝗘𝗟𝗘𝗖𝗧 𝗪𝗛𝗘𝗥𝗘 𝗬𝗢𝗨 𝗪𝗔𝗡𝗧 𝗧𝗢 𝗥𝗘𝗖𝗘𝗜𝗩𝗘 𝗬𝗢𝗨𝗥 𝗙𝗨𝗡𝗗𝗦')}*:", reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await safe_send(context, chat_id, f"⚠️ *{bold('𝗣𝗟𝗘𝗔𝗦𝗘 𝗨𝗣𝗟𝗢𝗔𝗗 𝗔 𝗩𝗔𝗟𝗜𝗗 𝗦𝗖𝗥𝗘𝗘𝗡𝗦𝗛𝗢𝗧/𝗜𝗠𝗔𝗚𝗘')}*.")
+
+    elif step == "ENTER_ACC":
+        if text.upper() == "CANCEL":
+            user_states.pop(user_id, None)
+            await safe_send(context, chat_id, f"🏠 *{bold('Trade Canceled')}*", reply_markup=get_main_menu(user_id))
+            return
+        if len(text) < 5:
+            await safe_send(context, chat_id, f"⚠️ *{bold('Invalid Account Number. Please enter a valid one.')}* (Minimum 5 characters or type 'CANCEL')")
+            return
+        state["data"]["acc"] = text
+        await submit_request(context, user_id, state["data"], update.effective_user.first_name or "User")
+        user_states.pop(user_id, None)
+        await safe_send(context, chat_id, f"⏳ *{bold('Request Submitted')}*\n\n✅ *{bold('Please stay online. Your payment will be sent shortly.')}*", reply_markup=get_main_menu(user_id))
     
+    # Admin Panel Inputs
+    elif step == "ADM_RATE":
+        try:
+            settings["exchangeRate"] = float(text)
+            save_settings()
+            user_states.pop(user_id)
+            await safe_send(context, chat_id, f"✅ *{bold('Rate Updated Successfully!')}*")
+            await show_admin_panel(context, chat_id)
+        except: pass
+    elif step == "ADM_ADD_DEP_NAME":
+        state["data"]["name"] = text
+        state["step"] = "ADM_ADD_DEP_ADDR"
+        await safe_send(context, chat_id, f"📍 *{bold('Enter Wallet Address for')}* {bold(text)}:")
+    elif step == "ADM_ADD_DEP_ADDR":
+        settings["depositMethods"].append({"name": state["data"]["name"], "address": text})
+        save_settings()
+        user_states.pop(user_id)
+        await safe_send(context, chat_id, f"✅ *{bold('Deposit Method Added!')}*")
+        await show_admin_panel(context, chat_id)
+    
+    elif step == "ADM_ADD_WITH":
+        settings["withdrawalMethods"].append(text)
+        save_settings()
+        user_states.pop(user_id)
+        await safe_send(context, chat_id, f"✅ *{bold('Withdrawal Method Added!')}*")
+        await show_admin_panel(context, chat_id)
+
+    elif step == "ADM_ADD_ADM":
+        try:
+            new_id = int(text)
+            if new_id not in settings["admins"]:
+                settings["admins"].append(new_id)
+                save_settings()
+                await safe_send(context, chat_id, f"✅ *{bold('New Admin Added!')}* (ID: {new_id})")
+            else:
+                await safe_send(context, chat_id, f"ℹ️ *{bold('Already an Admin!')}*")
+        except:
+            await safe_send(context, chat_id, f"⚠️ *{bold('Invalid ID. Please enter numbers only.')}*")
+        user_states.pop(user_id)
+        await show_admin_panel(context, chat_id)
+
+    elif step == "ADM_SET_SUP":
+        settings["supportUsername"] = text.replace("@", "")
+        save_settings()
+        user_states.pop(user_id)
+        await safe_send(context, chat_id, f"✅ *{bold('Support Username Updated!')}*")
+        await show_admin_panel(context, chat_id)
+
+    elif step == "AWAIT_BC":
+        success = 0
+        fail = 0
+        msg = update.message
+        
+        status_msg = await safe_send(context, chat_id, f"⌛ *{bold('Broadcasting...')}*")
+        
+        for uid in settings.get("users", []):
+            try:
+                await context.bot.copy_message(chat_id=uid, from_chat_id=chat_id, message_id=msg.message_id)
+                success += 1
+            except:
+                fail += 1
+        
+        user_states.pop(user_id, None)
+        await safe_edit(context, chat_id, status_msg.message_id, 
+                        f"✅ *{bold('Broadcast Completed')}*\n\n"
+                        f"🟢 *{bold('Success')}*: {success}\n"
+                        f"🔴 *{bold('Failed')}*: {fail}")
+        await show_admin_panel(context, chat_id)
+
+async def submit_request(context, user_id, data, first_name):
+    if not settings["adminGroupId"]: return
+    
+    user_link = f"[{bold(first_name)}](tg://user?id={user_id})"
+    message = (
+        f"*{bold('𝗨𝗦𝗘𝗥')}*: {user_link}\n\n"
+        f"*{bold('𝗗𝗘𝗣𝗢𝗦𝗜𝗧 𝗔𝗠𝗢𝗨𝗡𝗧')}*: {data['amount']} USD\n\n"
+        f"*{bold('𝗧𝗥𝗔𝗡𝗦𝗔𝗖𝗧𝗜𝗢𝗡 𝗜𝗗')}*: {data['txId']}\n\n"
+        f"*{bold('𝗗𝗘𝗣𝗢𝗦𝗜𝗧 𝗠𝗘𝗧𝗛𝗢𝗗')}*: {data['depositMethod']['name']}\n\n"
+        f"*{bold('𝗪𝗜𝗧𝗛𝗗𝗥𝗔𝗪𝗔𝗟 𝗔𝗠𝗢𝗨𝗡𝗧')}*: {data['totalBdt']} BDT\n\n"
+        f"*{bold('𝗪𝗜𝗧𝗛𝗗𝗥𝗔𝗪𝗔𝗟 𝗡𝗨𝗠𝗕𝗘𝗥')}*: {data['acc']}\n\n"
+        f"*{bold('𝗪𝗜𝗧𝗛𝗗𝗥𝗔𝗪𝗔𝗟 𝗠𝗘𝗧𝗛𝗢𝗗')}*: {data['withdrawalMethod']}"
+    )
+    
+    keyboard = [[
+        InlineKeyboardButton(f"✅ {bold('APPROVE')}", callback_data=f"approve_{user_id}"),
+        InlineKeyboardButton(f"❌ {bold('REJECT')}", callback_data=f"reject_{user_id}")
+    ]]
+    
+    await context.bot.send_photo(
+        chat_id=settings["adminGroupId"],
+        photo=data["screenshotId"],
+        caption=message,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def show_admin_panel(context, chat_id):
+    keyboard = [
+        [InlineKeyboardButton(f"📊 {bold('𝗦𝗘𝗧 𝗥𝗔𝗧𝗘')}", callback_data="adm_rate"), InlineKeyboardButton(f"📡 {bold('𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧')}", callback_data="adm_bc")],
+        [InlineKeyboardButton(f"➕ {bold('𝗠𝗔𝗡𝗔𝗚𝗘 𝗗𝗘𝗣𝗢𝗦𝗜𝗧')}", callback_data="adm_m_dep"), InlineKeyboardButton(f"🏧 {bold('𝗠𝗔𝗡𝗔𝗚𝗘 𝗪𝗜𝗧𝗛𝗗𝗥𝗔𝗪')}", callback_data="adm_m_with")],
+        [InlineKeyboardButton(f"👤 {bold('𝗠𝗔𝗡𝗔𝗚𝗘 𝗔𝗗𝗠𝗜𝗡𝗦')}", callback_data="adm_m_adm"), InlineKeyboardButton(f"👥 {bold('𝗠𝗔𝗡𝗔𝗚𝗘 𝗚𝗥𝗢𝗨𝗣')}", callback_data="adm_m_grp")],
+        [InlineKeyboardButton(f"🎧 {bold('𝗠𝗔𝗡𝗔𝗚𝗘 𝗦𝗨𝗣𝗣𝗢𝗥𝗧')}", callback_data="adm_m_sup"), InlineKeyboardButton(f"🗑️ {bold('𝗖𝗟𝗘𝗔𝗥 𝗔𝗟𝗟')}", callback_data="adm_clr")],
+        [InlineKeyboardButton(f"🔙 {bold('𝗖𝗟𝗢𝗦𝗘')}", callback_data="back_main")]
+    ]
+    await safe_send(context, chat_id, f"🛠️ *{bold('𝗔𝗗𝗠𝗜𝗡 𝗣𝗔𝗡𝗘𝗟')}*", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+    chat_id = query.message.chat_id
+    data = query.data
     await query.answer()
 
-    if data.startswith("country_"):
-        country = data.split("_")[1]
-        keyboard = []
-        for service in manager.get_services():
-            keyboard.append([InlineKeyboardButton(f"📲 {bold(service)}", callback_data=f"buy_{country}_{service}")])
-        keyboard.append([InlineKeyboardButton(f"🔙 {bold('BACK')}", callback_data="back_countries")])
-        
-        await query.edit_message_text(
-            f"🌍 *{bold('COUNTRY')}*: {bold(country)}\n"
-            f"📲 *{bold('SELECT SERVICE')}*:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
+    if data == "back_main":
+        user_states.pop(user_id, None)
+        await safe_send(context, chat_id, f"🏠 *{bold('Main Menu')}*", reply_markup=get_main_menu(user_id))
+    
+    elif data == "adm_panel":
+        await show_admin_panel(context, chat_id)
 
-    elif data.startswith("buy_"):
-        _, country, service = data.split("_")
-        number_data = manager.buy_number(country, service, user_id)
-        
-        buy_text = (
-            f"✅ *{bold('NUMBER BOUGHT')}*\n\n"
-            f"📲 *{bold('NUMBER')}*: `{number_data['number']}`\n"
-            f"🌍 *{bold('COUNTRY')}*: {bold(country)}\n"
-            f"💬 *{bold('SERVICE')}*: {bold(service)}\n\n"
-            f"⏳ *{bold('STATUS')}*: {bold(number_data['status'])}\n"
-            f"🔑 *{bold('OTP')}*: `{bold('WAITING...')}`\n\n"
-            f"📢 *{bold('SEND SMS NOW. THEN CLICK CHECK OTP')}*"
-        )
-        
-        keyboard = [
-            [InlineKeyboardButton(f"🔄 {bold('CHECK OTP')}", callback_data=f"check_{number_data['id']}")],
-            [InlineKeyboardButton(f"❌ {bold('CANCEL')}", callback_data=f"cancel_{number_data['id']}")]
+    elif data == "adm_m_dep":
+        btns = [[InlineKeyboardButton(f"❌ {bold('DELETE ' + m['name'])}", callback_data=f"del_dep_{m['name']}")] for m in settings["depositMethods"]]
+        btns.append([InlineKeyboardButton(f"➕ {bold('ADD METHOD')}", callback_data="adm_add_dep")])
+        btns.append([InlineKeyboardButton(f"🔙 {bold('BACK')}", callback_data="adm_panel")])
+        await safe_edit(context, chat_id, query.message.message_id, f"💳 *{bold('𝗠𝗔𝗡𝗔𝗚𝗘 𝗗𝗘𝗣𝗢𝗦𝗜𝗧')}*", reply_markup=InlineKeyboardMarkup(btns))
+
+    elif data == "adm_add_dep":
+        user_states[user_id] = {"step": "ADM_ADD_DEP_NAME", "data": {}}
+        await safe_send(context, chat_id, f"➕ *{bold('ENTER DEPOSIT METHOD NAME')}*:")
+
+    elif data == "adm_m_with":
+        btns = [[InlineKeyboardButton(f"❌ {bold('DELETE ' + m)}", callback_data=f"del_with_{m}")] for m in settings["withdrawalMethods"]]
+        btns.append([InlineKeyboardButton(f"➕ {bold('ADD METHOD')}", callback_data="adm_add_with")])
+        btns.append([InlineKeyboardButton(f"🔙 {bold('BACK')}", callback_data="adm_panel")])
+        await safe_edit(context, chat_id, query.message.message_id, f"🏧 *{bold('𝗠𝗔𝗡𝗔𝗚𝗘 𝗪𝗜𝗧𝗛𝗗𝗥𝗔𝗪')}*", reply_markup=InlineKeyboardMarkup(btns))
+
+    elif data == "adm_add_with":
+        user_states[user_id] = {"step": "ADM_ADD_WITH"}
+        await safe_send(context, chat_id, f"➕ *{bold('ENTER WITHDRAWAL METHOD NAME')}*:")
+
+    elif data == "adm_m_adm":
+        removable = [aid for aid in settings["admins"] if aid not in PERMANENT_ADMIN_IDS]
+        btns = [[InlineKeyboardButton(f"❌ {bold('REMOVE ' + str(aid))}", callback_data=f"del_adm_{aid}")] for aid in removable]
+        btns.append([InlineKeyboardButton(f"➕ {bold('ADD ADMIN')}", callback_data="adm_add_adm")])
+        btns.append([InlineKeyboardButton(f"🔙 {bold('BACK')}", callback_data="adm_panel")])
+        await safe_edit(context, chat_id, query.message.message_id, f"👤 *{bold('𝗠𝗔𝗡𝗔𝗚𝗘 𝗔𝗗𝗠𝗜𝗡𝗦')}*", reply_markup=InlineKeyboardMarkup(btns))
+
+    elif data == "adm_add_adm":
+        user_states[user_id] = {"step": "ADM_ADD_ADM"}
+        await safe_send(context, chat_id, f"➕ *{bold('ENTER NEW ADMIN TELEGRAM ID')}*:")
+
+    elif data == "adm_m_grp":
+        btns = [
+            [InlineKeyboardButton(f"🔄 {bold('CHANGE GROUP')}", callback_data="adm_set_grp")],
+            [InlineKeyboardButton(f"🔙 {bold('BACK')}", callback_data="adm_panel")]
         ]
-        
-        await query.edit_message_text(buy_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        await safe_edit(context, chat_id, query.message.message_id, f"👥 *{bold('𝗠𝗔𝗡𝗔𝗚𝗘 𝗔𝗗𝗠𝗜𝗡 𝗚𝗥𝗢𝗨𝗣')}*\n\n*{bold('CURRENT ID')}*: {settings['adminGroupId']}", reply_markup=InlineKeyboardMarkup(btns))
+    
+    elif data == "adm_set_grp":
+        settings["adminGroupId"] = chat_id
+        save_settings()
+        await query.answer("Group Set!", show_alert=True)
+        await show_admin_panel(context, chat_id)
 
-    elif data.startswith("check_"):
-        num_id = data.split("_")[1]
-        num_data = manager.check_otp(user_id, num_id)
-        
-        if num_data and num_data['otp']:
-            success_text = (
-                f"🎉 *{bold('OTP RECEIVED')}*\n\n"
-                f"📲 *{bold('NUMBER')}*: `{num_data['number']}`\n"
-                f"🔑 *{bold('OTP CODE')}*: `{bold(num_data['otp'])}`\n\n"
-                f"✅ *{bold('SERVICE ACTIVATED!')}*"
-            )
-            await query.edit_message_text(success_text, parse_mode='Markdown')
-        else:
-            await query.answer(f"⏳ {bold('OTP NOT RECEIVED YET. PLEASE WAIT...')}", show_alert=True)
+    elif data == "adm_m_sup":
+        btns = [
+            [InlineKeyboardButton(f"🔄 {bold('CHANGE USERNAME')}", callback_data="adm_set_sup_input")],
+            [InlineKeyboardButton(f"🔙 {bold('BACK')}", callback_data="adm_panel")]
+        ]
+        await safe_edit(context, chat_id, query.message.message_id, f"🎧 *{bold('𝗠𝗔𝗡𝗔𝗚𝗘 𝗦𝗨𝗣𝗣𝗢𝗥𝗧')}*\n\n*{bold('CURRENT')}*: @{settings['supportUsername']}", reply_markup=InlineKeyboardMarkup(btns))
 
-    elif data == "back_countries":
-        keyboard = []
-        for country in manager.get_countries():
-            keyboard.append([InlineKeyboardButton(f"🌍 {bold(country)}", callback_data=f"country_{country}")])
-        await query.edit_message_text(f"🌍 *{bold('SELECT COUNTRY')}*:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    elif data == "adm_set_sup_input":
+        user_states[user_id] = {"step": "ADM_SET_SUP"}
+        await safe_send(context, chat_id, f"🎧 *{bold('ENTER NEW SUPPORT USERNAME (WITHOUT @)')}*:")
+
+    elif data == "adm_clr":
+        settings["depositMethods"] = []
+        settings["withdrawalMethods"] = []
+        save_settings()
+        await query.answer("Data Cleared!", show_alert=True)
+        await show_admin_panel(context, chat_id)
+
+    elif data.startswith("del_dep_"):
+        name = data.replace("del_dep_", "")
+        settings["depositMethods"] = [m for m in settings["depositMethods"] if m["name"] != name]
+        save_settings()
+        await query.answer(f"Deleted {name}")
+        await show_admin_panel(context, chat_id)
+
+    elif data.startswith("del_with_"):
+        name = data.replace("del_with_", "")
+        settings["withdrawalMethods"] = [m for m in settings["withdrawalMethods"] if m != name]
+        save_settings()
+        await query.answer(f"Deleted {name}")
+        await show_admin_panel(context, chat_id)
+
+    elif data.startswith("del_adm_"):
+        aid = int(data.replace("del_adm_", ""))
+        settings["admins"] = [a for a in settings["admins"] if a != aid]
+        save_settings()
+        await query.answer(f"Admin Removed")
+        await show_admin_panel(context, chat_id)
+
+    elif data == "adm_bc":
+        user_states[user_id] = {"step": "AWAIT_BC"}
+        await safe_send(context, chat_id, f"📡 *{bold('𝗦𝗘𝗡𝗗 𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧 𝗠𝗘𝗦𝗦𝗔𝗚𝗘')}*\n\n"
+                                         f"➤ You can send *Text, Photo, Video, Sticker, File* etc.\n"
+                                         f"➤ Everything will be sent as you send it!")
+
+    elif data == "adm_rate":
+        user_states[user_id] = {"step": "ADM_RATE"}
+        await safe_send(context, chat_id, f"📊 *{bold('𝗘𝗡𝗧𝗘𝗥 𝗡𝗘𝗪 𝗘𝗫𝗖𝗛𝗔𝗡𝗚𝗘 𝗥𝗔𝗧𝗘')}*:\n\n"
+                                         f"➤ Current: {settings['exchangeRate']} BDT")
+
+    elif data.startswith("dep_"):
+        method_name = data.replace("dep_", "")
+        method = next((m for m in settings["depositMethods"] if m["name"] == method_name), None)
+        if method:
+            user_states[user_id]["data"]["depositMethod"] = method
+            user_states[user_id]["step"] = "ENTER_AMOUNT"
+            await safe_send(context, chat_id, f"💵 *{bold('ENTER AMOUNT (USD)')}*\n\n💹 *{bold('RATE')}*: 1 USD = {settings['exchangeRate']} BDT")
+    elif data.startswith("with_"):
+        method = data.replace("with_", "")
+        user_states[user_id]["data"]["withdrawalMethod"] = method
+        user_states[user_id]["step"] = "ENTER_ACC"
+        await safe_send(context, chat_id, f"📍 *{bold('ENTER YOUR ' + method + ' NUMBER/ACCOUNT')}*:")
+    elif data.startswith("approve_"):
+        uid = int(data.split("_")[1])
+        await context.bot.send_message(uid, f"✅ *{bold('Payment Successful')}*\n\n💸 Funds sent to your number!")
+        await safe_edit(context, chat_id, query.message.message_id, f"✅ *{bold('PROCESSED: APPROVED')}*")
+    elif data.startswith("reject_"):
+        uid = int(data.split("_")[1])
+        await context.bot.send_message(uid, f"❌ *{bold('Request Rejected')}*\n\nContact support!")
+        await safe_edit(context, chat_id, query.message.message_id, f"❌ *{bold('PROCESSED: REJECTED')}*")
 
 def main():
-    # Use the token you provided in the beginning or prompt
-    # Since I don't have a real token to run, this is a skeleton
-    print("Starting bot...")
-    application = Application.builder().token(TOKEN).build()
+    app = Application.builder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
+    app.add_handler(CallbackQueryHandler(handle_callback))
+    print("Bot Started...")
+    app.run_polling()
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    application.add_handler(CallbackQueryHandler(callback_query_handler))
-
-    application.run_polling()
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
