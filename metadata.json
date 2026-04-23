@@ -1,0 +1,6 @@
+{
+  "name": "Dollar Exchange Telegram Bot",
+  "description": "An automated Telegram bot for selling dollars with admin control, exchange rates, and group-based transaction approvals.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
