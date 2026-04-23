@@ -21,20 +21,7 @@ const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
 
 const token = '8716745260:AAGPEuKxQgK3Vv7kTQ5vmlup89acZ9trLNQ';
-// Disabling Node.js bot polling to avoid conflict with bot.py
-// const bot = new TelegramBot(token, { polling: true });
-
-// Dummy bot object to prevent crashes in other parts of server.ts if called
-const bot = {
-  sendMessage: async () => {},
-  deleteMessage: async () => {},
-  editMessageText: async () => {},
-  sendPhoto: async () => {},
-  editMessageReplyMarkup: async () => {},
-  onText: () => {},
-  on: () => {},
-  answerCallbackQuery: () => {}
-} as any;
+const bot = new TelegramBot(token, { polling: true });
 
 interface Settings {
   admins: number[];

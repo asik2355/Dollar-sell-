@@ -1,2 +1,5 @@
-python-telegram-bot==20.8
-firebase-admin==6.2.0
+python-telegram-bot
+google-generativeai
+firebase-admin
+python-dotenv
+requests
