@@ -9,6 +9,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 TOKEN = "8716745260:AAGPEuKxQgK3Vv7kTQ5vmlup89acZ9trLNQ"
 PERMANENT_ADMIN_IDS = [8716745260, 8197284774]
 SETTINGS_FILE = "settings.json"
+USERS_FILE = "users.json"
 
 # --- DEFAULTS ---
 settings = {
@@ -20,7 +21,9 @@ settings = {
     "supportUsername": "admin"
 }
 
-# Tracking for clean UI (stores last bot message ID per chat)
+users_db = []
+
+# Tracking for clean UI
 last_message_ids = {}
 
 # --- UNICODE BOLD HELPER ---
@@ -36,25 +39,36 @@ def bold(text):
     return to_unicode_bold(text)
 
 # --- PERSISTENCE ---
-def load_settings():
-    global settings
+def load_data():
+    global settings, users_db
     if os.path.exists(SETTINGS_FILE):
         try:
             with open(SETTINGS_FILE, "r") as f:
-                data = json.load(f)
-                settings.update(data)
+                settings.update(json.load(f))
         except: pass
-    # Ensure permanent admins are always there
+    if os.path.exists(USERS_FILE):
+        try:
+            with open(USERS_FILE, "r") as f:
+                users_db = json.load(f)
+        except: users_db = []
+    
+    # Ensure permanent admins stay
     for admin_id in PERMANENT_ADMIN_IDS:
         if admin_id not in settings["admins"]:
             settings["admins"].append(admin_id)
 
-def save_settings():
+def save_data():
     with open(SETTINGS_FILE, "w") as f:
         json.dump(settings, f, indent=2)
+    with open(USERS_FILE, "w") as f:
+        json.dump(users_db, f, indent=2)
 
-load_settings()
+def track_user(user_id):
+    if user_id not in users_db:
+        users_db.append(user_id)
+        save_data()
 
+load_data()
 user_states = {}
 
 def is_admin(user_id):
@@ -68,7 +82,6 @@ def get_main_menu(user_id):
 
 async def safe_send(context, chat_id, text, reply_markup=None, parse_mode='Markdown'):
     global last_message_ids
-    # Delete previous bot message to keep chat clean
     if chat_id in last_message_ids:
         try:
             await context.bot.delete_message(chat_id, last_message_ids[chat_id])
@@ -82,14 +95,12 @@ async def safe_edit(context, chat_id, message_id, text, reply_markup=None, parse
     try:
         await context.bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, reply_markup=reply_markup, parse_mode=parse_mode, disable_web_page_preview=True)
     except:
-        # If edit fails, send a new message
         await safe_send(context, chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Restrict to private chats
     if update.effective_chat.type != 'private': return
-
     user_id = update.effective_user.id
+    track_user(user_id)
     welcome_text = (
         f"𝗔𝗦𝗦𝗔𝗠𝗨𝗟𝗔𝗜𝗞𝗨𝗠 ❤️\n"
         f"𝗜'𝗠 {bold('𝗥𝗔𝗙𝗦𝗨𝗡 𝗥𝗔𝗩𝗜𝗗')}\n"
@@ -98,14 +109,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await safe_send(context, update.effective_chat.id, welcome_text, reply_markup=get_main_menu(user_id))
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Restrict to private chats
     if update.effective_chat.type != 'private': return
-
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     text = update.message.text
     
-    # Normalize text for menu logic
     clean_text = "".join(c for c in (text or "") if c.isalnum() or c.isspace()).upper()
     
     if "SELL DOLLAR" in clean_text:
@@ -195,7 +203,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif step == "ADM_RATE":
         try:
             settings["exchangeRate"] = float(text)
-            save_settings()
+            save_data()
             user_states.pop(user_id)
             await safe_send(context, chat_id, f"✅ *{bold('Rate Updated Successfully!')}*")
             await show_admin_panel(context, chat_id)
@@ -206,30 +214,48 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_send(context, chat_id, f"📍 *{bold('Enter Wallet Address for')}* {bold(text)}:")
     elif step == "ADM_ADD_DEP_ADDR":
         settings["depositMethods"].append({"name": state["data"]["name"], "address": text})
-        save_settings()
+        save_data()
         user_states.pop(user_id)
         await safe_send(context, chat_id, f"✅ *{bold('Deposit Method Added!')}*")
         await show_admin_panel(context, chat_id)
     elif step == "ADM_ADD_WITH_NAME":
         settings["withdrawalMethods"].append(text)
-        save_settings()
+        save_data()
         user_states.pop(user_id)
         await safe_send(context, chat_id, f"✅ *{bold('Withdrawal Method Added!')}*")
         await show_admin_panel(context, chat_id)
+    elif step == "ADM_ADD_ADM":
+        try:
+            new_id = int(text)
+            if new_id not in settings["admins"]:
+                settings["admins"].append(new_id)
+                save_data()
+                await safe_send(context, chat_id, f"✅ *{bold('Admin Added Success')}*")
+            else:
+                await safe_send(context, chat_id, f"⚠️ *{bold('User is already Admin')}*")
+        except:
+            await safe_send(context, chat_id, f"❌ *{bold('Invalid User ID')}*")
+        user_states.pop(user_id)
+        await show_admin_panel(context, chat_id)
     elif step == "ADM_SET_SUP":
         settings["supportUsername"] = text.replace("@", "")
-        save_settings()
+        save_data()
         user_states.pop(user_id)
         await safe_send(context, chat_id, f"✅ *{bold('Support Username Updated!')}*")
         await show_admin_panel(context, chat_id)
     elif step == "ADM_BC":
-        # Broadcaster logic placeholder
-        await safe_send(context, chat_id, f"⚠️ *{bold('Broadcast requires a user database.')}*")
+        success, fails = 0, 0
+        for uid in users_db:
+            try:
+                await context.bot.send_message(uid, f"📢 *{bold('𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧 𝗠𝗘𝗦𝗦𝗔𝗚𝗘')}*\n\n{text}")
+                success += 1
+            except: fails += 1
+        await safe_send(context, chat_id, f"✅ *{bold('Broadcast Finished')}*\n\n🚀 Success: {success}\n⚠️ Fails: {fails}")
         user_states.pop(user_id)
+        await show_admin_panel(context, chat_id)
 
 async def submit_request(context, user_id, data, first_name):
     if not settings["adminGroupId"]: return
-    
     user_link = f"[{bold(first_name)}](tg://user?id={user_id})"
     message = (
         f"*{bold('𝗨𝗦𝗘𝗥')}*: {user_link}\n\n"
@@ -240,25 +266,14 @@ async def submit_request(context, user_id, data, first_name):
         f"*{bold('𝗪𝗜𝗧𝗛𝗗𝗥𝗔𝗪𝗔𝗟 𝗡𝗨𝗠𝗕𝗘𝗥')}*: `{data['acc']}`\n\n"
         f"*{bold('𝗪𝗜𝗧𝗛𝗗𝗥𝗔𝗪𝗔𝗟 𝗠𝗘𝗧𝗛𝗢𝗗')}*: {data['withdrawalMethod']}"
     )
-    
-    keyboard = [[
-        InlineKeyboardButton(f"✅ {bold('APPROVE')}", callback_data=f"approve_{user_id}"),
-        InlineKeyboardButton(f"❌ {bold('REJECT')}", callback_data=f"reject_{user_id}")
-    ]]
-    
-    await context.bot.send_photo(
-        chat_id=settings["adminGroupId"],
-        photo=data["screenshotId"],
-        caption=message,
-        parse_mode='Markdown',
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    keyboard = [[InlineKeyboardButton(f"✅ {bold('APPROVE')}", callback_data=f"approve_{user_id}"), InlineKeyboardButton(f"❌ {bold('REJECT')}", callback_data=f"reject_{user_id}")]]
+    await context.bot.send_photo(chat_id=settings["adminGroupId"], photo=data["screenshotId"], caption=message, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def show_admin_panel(context, chat_id):
     keyboard = [
         [InlineKeyboardButton(f"📊 {bold('𝗦𝗘𝗧 𝗥𝗔𝗧𝗘')}", callback_data="adm_rate"), InlineKeyboardButton(f"📡 {bold('𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧')}", callback_data="adm_bc_start")],
         [InlineKeyboardButton(f"➕ {bold('𝗠𝗔𝗡𝗔𝗚𝗘 𝗗𝗘𝗣𝗢𝗦𝗜𝗧')}", callback_data="adm_m_dep"), InlineKeyboardButton(f"🏧 {bold('𝗠𝗔𝗡𝗔𝗚𝗘 𝗪𝗜𝗧𝗛𝗗𝗥𝗔𝗪')}", callback_data="adm_m_with")],
-        [InlineKeyboardButton(f"👤 {bold('𝗠𝗔𝗡𝗔𝗚𝗘 𝗔𝗗𝗠𝗜𝗡𝗦')}", callback_data="adm_m_adm"), InlineKeyboardButton(f"👥 {bold('𝗠𝗔𝗡𝗔𝗚𝗘 𝗚𝗥𝗢𝗨𝗣')}", callback_data="adm_m_grp")],
+        [InlineKeyboardButton(f"👤 {bold('𝗠𝗔𝗡𝗔𝗚𝗘 𝗔𝗗𝗠𝗜𝗡𝗦')}", callback_data="adm_m_adm"), InlineKeyboardButton(f"👥 {bold('𝗦𝗘𝗧 𝗚𝗥𝗢𝗨𝗣')}", callback_data="adm_m_grp")],
         [InlineKeyboardButton(f"🎧 {bold('𝗠𝗔𝗡𝗔𝗚𝗘 𝗦𝗨𝗣𝗣𝗢𝗥𝗧')}", callback_data="adm_m_sup")],
         [InlineKeyboardButton(f"🔙 {bold('𝗖𝗟𝗢𝗦𝗘')}", callback_data="back_main")]
     ]
@@ -281,11 +296,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_send(context, chat_id, f"📈 *{bold('Enter New Exchange Rate')}*:")
     elif data == "adm_bc_start":
         user_states[user_id] = {"step": "ADM_BC", "data": {}}
-        await safe_send(context, chat_id, f"📡 *{bold('Enter Message to Broadcast (Requires User DB)')}*:")
+        await safe_send(context, chat_id, f"📡 *{bold('Enter Message to Broadcast All Users')}*:")
     elif data == "adm_m_dep":
-        btns = []
-        for d in settings["depositMethods"]:
-            btns.append([InlineKeyboardButton(f"❌ Delete {d['name']}", callback_data=f"del_dep_{d['name']}")])
+        btns = [[InlineKeyboardButton(f"❌ Delete {d['name']}", callback_data=f"del_dep_{d['name']}")] for d in settings["depositMethods"]]
         btns.append([InlineKeyboardButton(f"➕ Add New", callback_data="adm_add_dep")])
         btns.append([InlineKeyboardButton(f"🔙 Back", callback_data="adm_panel")])
         await safe_edit(context, chat_id, query.message.message_id, f"💳 *{bold('Manage Deposit Methods')}*", reply_markup=InlineKeyboardMarkup(btns))
@@ -293,15 +306,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_states[user_id] = {"step": "ADM_ADD_DEP_NAME", "data": {}}
         await safe_send(context, chat_id, f"➕ *{bold('Enter Name for Deposit Method')}*:")
     elif data.startswith("del_dep_"):
-        name = data.replace("del_dep_", "")
-        settings["depositMethods"] = [d for d in settings["depositMethods"] if d["name"] != name]
-        save_settings()
-        await query.answer("Deleted!")
+        settings["depositMethods"] = [d for d in settings["depositMethods"] if d["name"] != data.replace("del_dep_", "")]
+        save_data()
         await show_admin_panel(context, chat_id)
     elif data == "adm_m_with":
-        btns = []
-        for w in settings["withdrawalMethods"]:
-            btns.append([InlineKeyboardButton(f"❌ Delete {w}", callback_data=f"del_with_{w}")])
+        btns = [[InlineKeyboardButton(f"❌ Delete {w}", callback_data=f"del_with_{w}")] for w in settings["withdrawalMethods"]]
         btns.append([InlineKeyboardButton(f"➕ Add New", callback_data="adm_add_with")])
         btns.append([InlineKeyboardButton(f"🔙 Back", callback_data="adm_panel")])
         await safe_edit(context, chat_id, query.message.message_id, f"🏧 *{bold('Manage Withdrawal Methods')}*", reply_markup=InlineKeyboardMarkup(btns))
@@ -309,45 +318,54 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_states[user_id] = {"step": "ADM_ADD_WITH_NAME", "data": {}}
         await safe_send(context, chat_id, f"➕ *{bold('Enter Name for Withdrawal Method')}*:")
     elif data.startswith("del_with_"):
-        name = data.replace("del_with_", "")
-        settings["withdrawalMethods"] = [w for w in settings["withdrawalMethods"] if w != name]
-        save_settings()
-        await query.answer("Deleted!")
+        settings["withdrawalMethods"] = [w for w in settings["withdrawalMethods"] if w != data.replace("del_with_", "")]
+        save_data()
+        await show_admin_panel(context, chat_id)
+    elif data == "adm_m_adm":
+        btns = [[InlineKeyboardButton(f"❌ Remove {aid}", callback_data=f"rem_adm_{aid}")] for aid in settings["admins"] if aid not in PERMANENT_ADMIN_IDS]
+        btns.append([InlineKeyboardButton(f"➕ Add Admin", callback_data="adm_add_adm_start")])
+        btns.append([InlineKeyboardButton(f"🔙 Back", callback_data="adm_panel")])
+        await safe_edit(context, chat_id, query.message.message_id, f"👤 *{bold('Manage Administrators')}*", reply_markup=InlineKeyboardMarkup(btns))
+    elif data == "adm_add_adm_start":
+        user_states[user_id] = {"step": "ADM_ADD_ADM", "data": {}}
+        await safe_send(context, chat_id, f"👤 *{bold('Enter Telegram User ID to add as Admin')}*:")
+    elif data.startswith("rem_adm_"):
+        try:
+            aid = int(data.replace("rem_adm_", ""))
+            settings["admins"] = [admin for admin in settings["admins"] if admin != aid]
+            save_data()
+            await query.answer("Admin Removed")
+        except: pass
         await show_admin_panel(context, chat_id)
     elif data == "adm_m_sup":
         user_states[user_id] = {"step": "ADM_SET_SUP", "data": {}}
         await safe_send(context, chat_id, f"🎧 *{bold('Enter New Support Username (without @)')}*:")
     elif data == "adm_m_grp":
         settings["adminGroupId"] = chat_id
-        save_settings()
-        await query.answer("Admin Group Set to Current Chat!", show_alert=True)
+        save_data()
+        await query.answer("Admin Group Set!", show_alert=True)
         await show_admin_panel(context, chat_id)
     elif data.startswith("dep_"):
-        method_name = data.replace("dep_", "")
-        method = next((m for m in settings["depositMethods"] if m["name"] == method_name), None)
+        method = next((m for m in settings["depositMethods"] if m["name"] == data.replace("dep_", "")), None)
         if method:
             user_states[user_id]["data"]["depositMethod"] = method
             user_states[user_id]["step"] = "ENTER_AMOUNT"
-            await safe_send(context, chat_id, f"💵 *{bold('ENTER AMOUNT (USD)')}*\n\n💹 *{bold('RATE')}*: 1 USD = {settings['exchangeRate']} BDT")
+            await safe_send(context, chat_id, f"💵 *{bold('ENTER AMOUNT (USD)')}*\n💹 Rate: 1 USD = {settings['exchangeRate']} BDT")
     elif data.startswith("with_"):
-        method = data.replace("with_", "")
-        user_states[user_id]["data"]["withdrawalMethod"] = method
+        user_states[user_id]["data"]["withdrawalMethod"] = data.replace("with_", "")
         user_states[user_id]["step"] = "ENTER_ACC"
-        await safe_send(context, chat_id, f"📍 *{bold('ENTER YOUR ' + method + ' NUMBER/ACCOUNT')}*:")
-    elif data.startswith("approve_"):
+        await safe_send(context, chat_id, f"📍 *{bold('ENTER YOUR ' + user_states[user_id]['data']['withdrawalMethod'] + ' NUMBER')}*:")
+    elif data.startswith("approve_") or data.startswith("reject_"):
         if not is_admin(user_id):
             await query.answer("Access Denied", show_alert=True)
             return
         uid = int(data.split("_")[1])
-        await context.bot.send_message(uid, f"✅ *{bold('𝗣𝗔𝗬𝗠𝗘𝗡𝗧 𝗦𝗨𝗖𝗖𝗘𝗦𝗦𝗙𝗨𝗟')}*\n\n💸 {bold('𝗥𝗘𝗤𝗨𝗘𝗦𝗧𝗘𝗗 𝗙𝗨𝗡𝗗𝗦 𝗛𝗔𝗩𝗘 𝗕𝗘𝗘𝗡 𝗦𝗨𝗖𝗖𝗘𝗦𝗦𝗙𝗨𝗟𝗟𝗬 𝗦𝗘𝗡𝗧 𝗧𝗢 𝗬𝗢𝗨𝗥 𝗣𝗥𝗢𝗩𝗜𝗗𝗘𝗗 𝗡𝗨𝗠𝗕𝗘𝗥.')}")
-        await safe_edit(context, chat_id, query.message.message_id, f"✅ *{bold('PROCESSED: APPROVED')}*", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(f"✅ {bold('APPROVED')}", callback_data="none")]]))
-    elif data.startswith("reject_"):
-        if not is_admin(user_id):
-            await query.answer("Access Denied", show_alert=True)
-            return
-        uid = int(data.split("_")[1])
-        await context.bot.send_message(uid, f"❌ *{bold('𝗥𝗘𝗝𝗘𝗖𝗧𝗘𝗗')}*\n\n📨 {bold('𝗬𝗢𝗨𝗥 𝗧𝗥𝗔𝗗𝗘 𝗥𝗘𝗤𝗨𝗘𝗦𝗧 𝗛𝗔𝗦 𝗕𝗘𝗘𝗡 𝗥𝗘𝗝𝗘𝗖𝗧𝗘𝗗 𝗕𝗬 𝗧𝗛𝗘 𝗔𝗗𝗠𝗜𝗡𝗜𝗦𝗧𝗥𝗔𝗧𝗢𝗥.')}")
-        await safe_edit(context, chat_id, query.message.message_id, f"❌ *{bold('PROCESSED: REJECTED')}*", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(f"❌ {bold('REJECTED')}", callback_data="none")]]))
+        if data.startswith("approve_"):
+            await context.bot.send_message(uid, f"✅ *{bold('𝗣𝗔𝗬𝗠𝗘𝗡𝗧 𝗦𝗨𝗖𝗖𝗘𝗦𝗦𝗙𝗨𝗟')}*\n\n💸 {bold('𝗥𝗘𝗤𝗨𝗘𝗦𝗧𝗘𝗗 𝗙𝗨𝗡𝗗𝗦 𝗛𝗔𝗩𝗘 𝗕𝗘𝗘𝗡 𝗦𝗨𝗖𝗖𝗘𝗦𝗦𝗙𝗨𝗟𝗟𝗬 𝗦𝗘𝗡𝗧.')}")
+            await safe_edit(context, chat_id, query.message.message_id, f"✅ *{bold('APPROVED')}*", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(f"✅ {bold('APPROVED')}", callback_data="none")]]))
+        else:
+            await context.bot.send_message(uid, f"❌ *{bold('𝗥𝗘𝗝𝗘𝗖𝗧𝗘𝗗')}*\n\n📨 {bold('𝗬𝗢𝗨𝗥 𝗧𝗥𝗔𝗗𝗘 𝗥𝗘𝗤𝗨𝗘𝗦𝗧 𝗛𝗔𝗦 𝗕𝗘𝗘𝗡 𝗥𝗘𝗝𝗘𝗖𝗧𝗘𝗗.')}")
+            await safe_edit(context, chat_id, query.message.message_id, f"❌ *{bold('REJECTED')}*", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(f"❌ {bold('REJECTED')}", callback_data="none")]]))
 
 def main():
     app = Application.builder().token(TOKEN).build()
